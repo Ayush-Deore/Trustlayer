@@ -1,227 +1,772 @@
-# TrustLayer — Multi-Modal Deepfake Analysis & Cross-Modal Reasoning Platform
+# TrustLayer — AI-Powered Digital Authenticity & Trust
 
-> **Participant 1 & Participant 2** · Branch: `anushka-work`
-
-TrustLayer analyzes digital artifacts (images, videos, documents) and evaluates whether a multi-artifact digital story is **AUTHENTIC, MANIPULATED, COORDINATED SYNTHETIC, or INSUFFICIENT EVIDENCE**.
-
----
-
-## Architecture
-
-```
-Upload (files or URL)
-       ↓
-POST /analyze
-       ↓
-  ┌─────────────────────────────────────────┐
-  │  image: ViT deepfake + face detection   │
-  │  video: FFmpeg frames → image loop      │
-  │  metadata: EXIF, software & timestamps  │
-  └─────────────────────────────────────────┘
-       ↓
-Structured Evidence JSON
-       ↓
-POST /investigate
-       ↓
-  ┌───────────────────────────────────────────────────────────┐
-  │  Modular Reasoning Package (backend/reasoning/)           │
-  │  • scorer.py        Artifact manipulation scoring         │
-  │  • matcher.py       Entity & camera matching (person_id)  │
-  │  • contradictions.py Single-artifact & cross-media conflicts│
-  │  • graph.py         Evidence graph relationships          │
-  │  • engine.py        Verdict classification & orchestration│
-  │  • llm_explainer.py Rationale & "Why?" synthesis          │
-  └───────────────────────────────────────────────────────────┘
-       ↓
-Trust Verdict JSON & Interactive Dashboard
-```
+<p align="center">
+  <strong>Analyze. Correlate. Verify.</strong>
+  <br />
+  An AI-powered digital forensics platform designed to identify manipulated media, extract forensic evidence, and establish trust across digital artifacts.
+</p>
 
 ---
 
-## Setup
+## Overview
+
+Generative AI has fundamentally changed how digital content is created and manipulated. Images can be altered, faces can be replaced, backgrounds can be synthetically generated, and videos can be modified to produce convincing but misleading representations of reality.
+
+Traditional deepfake detection systems typically focus on identifying whether an individual file is real or fake. However, digital authenticity is rarely a single-file problem.
+
+**TrustLayer aims to go beyond isolated deepfake detection.**
+
+It combines computer vision, forensic signal extraction, face recognition, metadata inspection, and cross-artifact analysis to assess the authenticity of digital content.
+
+Rather than relying on a single prediction, TrustLayer treats individual AI models as evidence-producing components within a broader trust assessment system.
+
+Its central question is:
+
+> Do the available digital artifacts provide consistent and credible evidence of the event, identity, and context they claim to represent?
+
+## Core Capabilities
+
+| Capability | Technology | Status |
+|---|---|---|
+| Image deepfake detection | Vision Transformer (ViT) | Implemented |
+| Face-crop deepfake detection | InsightFace + ViT | Implemented |
+| Background noise analysis | Laplacian variance | Implemented |
+| Face detection and recognition | InsightFace buffalo_l | Implemented |
+| Cross-artifact identity matching | FaceRegistry + cosine similarity | Implemented |
+| Video frame analysis | FFmpeg + OpenCV | Implemented |
+| Video-level manipulation assessment | Frame-level signal aggregation | Implemented |
+| EXIF and metadata extraction | Image metadata processing | Implemented |
+| Metadata anomaly detection | Heuristic-based checks | Implemented |
+| Custom model fine-tuning | PyTorch + Hugging Face | Available |
+| Audio forensics | — | Planned |
+| Document forensics | — | Planned |
+| Full cross-modal evidence fusion | — | Planned |
+
+---
+
+# 1. System Architecture
+
+TrustLayer follows a modular analysis pipeline. Each component extracts a different category of evidence, allowing the system to build a more complete assessment of an artifact.
+
+```text
+                 DIGITAL ARTIFACTS
+                         |
+              +----------+----------+
+              |                     |
+            IMAGES                VIDEOS
+              |                     |
+              v                     v
+       IMAGE ANALYZER         VIDEO PROCESSOR
+              |                     |
+       +------+------+       +------+------+
+       |      |      |       |             |
+      ViT   Face   Noise   Frame Sampling  FFmpeg
+       |   Analysis Analysis       |
+       |      |      |       Frame Analysis
+       +------+------+              |
+              |                     |
+              +----------+----------+
+                         |
+                  EVIDENCE EXTRACTION
+                         |
+          +--------------+--------------+
+          |              |              |
+     Visual Signals  Identity Data  Metadata
+          |              |              |
+          +--------------+--------------+
+                         |
+                  STRUCTURED OUTPUT
+                         |
+                  FRONTEND VALIDATOR
+                         |
+                 AUTHENTICITY REVIEW
+```
+
+The architecture separates artifact analysis from evidence interpretation. This allows individual detectors to be upgraded or replaced without requiring a complete redesign of the platform.
+
+## 2. Image Analysis Engine
+
+TrustLayer's image analysis engine combines deepfake classification, face-specific analysis, and background-level forensic heuristics.
+
+### 2.1 Vision Transformer Deepfake Detection
+
+The primary image classifier uses the Hugging Face model:
+
+[`dima806/deepfake_vs_real_image_detection`](https://huggingface.co/dima806/deepfake_vs_real_image_detection)
+
+The model analyzes uploaded images and produces classification scores associated with real and manipulated content.
+
+The backend normalizes model outputs into a consistent internal vocabulary:
+
+- `synthetic_visual`
+- `authentic_visual`
+- `uncertain`
+
+This normalization layer prevents downstream components from depending on the exact label names returned by individual models.
+
+### 2.2 Face-Crop Analysis
+
+Full-image downscaling can destroy subtle facial artifacts and reduce the effectiveness of deepfake detection.
+
+To address this, TrustLayer uses InsightFace to:
+
+1. Detect faces in the uploaded image.
+2. Extract bounding boxes for detected faces.
+3. Crop individual facial regions.
+4. Run deepfake analysis on the isolated face crops.
+5. Preserve face-level results alongside full-image analysis.
+
+This creates two distinct analytical perspectives:
+
+- Full-image analysis evaluates the overall visual content.
+- Face-crop analysis focuses on potential facial manipulation.
+
+### 2.3 Background Noise Detection
+
+A key component of TrustLayer is its attempt to identify suspicious backgrounds independently of facial authenticity.
+
+The current implementation uses **Laplacian variance** as a measure of image texture and high-frequency detail.
+
+The heuristic evaluates whether background regions exhibit unusually smooth or low-texture characteristics.
+
+It produces normalized signals:
+
+- `synthetic_background`
+- `authentic_background`
+
+This is particularly relevant to cases involving:
+
+- AI-generated background replacement.
+- Synthetic environments.
+- Composited photographs.
+- Background regions with unusual texture characteristics.
+
+**Important:** Laplacian variance is a heuristic, not a definitive synthetic-image detector. Natural backgrounds can also be smooth, while generated backgrounds can contain substantial texture. Its output should be interpreted alongside other forensic signals.
+
+### 2.4 Image Resource Management
+
+To maintain stability when processing high-resolution images, the engine automatically resizes large inputs to reduce memory consumption and mitigate out-of-memory errors.
+
+---
+
+# 3. Face Detection & Cross-Artifact Recognition
+
+TrustLayer uses InsightFace with the `buffalo_l` model for face detection and recognition.
+
+### Capabilities
+
+- Face bounding-box extraction.
+- Face embedding generation.
+- Face similarity comparison.
+- Session-scoped identity matching.
+- Stable person identifiers across uploaded artifacts.
+
+### FaceRegistry
+
+A session-scoped `FaceRegistry` maintains identity associations across multiple analyzed files.
+
+For example:
+
+```text
+image_001.jpg
+    |
+    +--> Face detected
+    +--> Embedding extracted
+    +--> person_01 assigned
+
+video_001.mp4
+    |
+    +--> Same face detected
+    +--> Embedding compared
+    +--> person_01 matched
+```
+
+Cosine similarity is used to compare embeddings and determine whether detected faces are sufficiently similar to an existing session identity.
+
+This allows TrustLayer to associate appearances across images and video frames without treating every detection as an entirely new person.
+
+The registry is session-scoped; identity matching is not a global identity verification service.
+
+---
+
+# 4. Video Analysis Engine
+
+Video analysis extends the image pipeline to temporal media.
+
+Rather than processing every frame, TrustLayer uses intelligent frame sampling to maintain manageable inference times.
+
+### Processing Pipeline
+
+```text
+             VIDEO UPLOAD
+                  |
+                  v
+             VIDEO PROBE
+                  |
+                  v
+          DURATION EXTRACTION
+                  |
+                  v
+            FRAME SAMPLING
+                  |
+             +----+----+
+             |         |
+           FFmpeg    OpenCV
+             |         |
+             +----+----+
+                  |
+                  v
+          SAMPLED VIDEO FRAMES
+                  |
+                  v
+           IMAGE ANALYSIS
+                  |
+                  v
+         FRAME-LEVEL SIGNALS
+                  |
+                  v
+         VIDEO-LEVEL ASSESSMENT
+```
+
+### Intelligent Frame Sampling
+
+The system uses FFmpeg for frame extraction, with OpenCV as a fallback.
+
+Current safeguards include:
+
+- Maximum of 12 sampled frames per video.
+- Duration-adaptive sampling intervals.
+- Controlled inference workload.
+- Frame-by-frame deepfake analysis.
+
+### Video-Level Confidence
+
+Individual frame predictions are aggregated into a video-level manipulation confidence assessment.
+
+This provides a summarized result without requiring exhaustive frame-by-frame inference.
+
+The current implementation should be understood as sampled-frame analysis rather than continuous temporal forensics.
+
+---
+
+# 5. Metadata & EXIF Forensics
+
+Digital files can contain contextual information that helps establish their origin and processing history.
+
+TrustLayer extracts available metadata and evaluates suspicious indicators.
+
+### Extracted Information
+
+- File size.
+- File format.
+- Camera make.
+- Camera model.
+- GPS metadata presence.
+- Date and time signatures.
+- Available software and editing metadata.
+
+### Anomaly Detection
+
+The system checks for indicators such as:
+
+- Known photo-editing software signatures.
+- Suspicious datetime signatures.
+- Mismatches between available date/time fields.
+- Missing or unusual metadata.
+
+Metadata anomalies are treated as supporting evidence rather than conclusive proof of manipulation.
+
+For example, missing EXIF data does not automatically mean that an image is fake. Social platforms, messaging applications, and image-processing software frequently strip metadata during normal operations.
+
+---
+
+# 6. API & Backend Infrastructure
+
+TrustLayer uses a FastAPI backend to expose analysis functionality.
+
+### Upload Endpoint
+
+`POST /analyze/`
+
+Accepts multiple uploaded image and video files for analysis under a shared session.
+
+Key characteristics:
+
+- Drag-and-drop batch upload support.
+- Multiple artifact processing.
+- Shared session context.
+- Cross-artifact face matching.
+- Structured analysis output.
+
+### URL Analysis Endpoint
+
+`POST /analyze/url`
+
+Accepts a public media URL and retrieves the referenced image or video for analysis.
+
+The implementation uses asynchronous HTTP requests through `httpx`.
+
+This allows the backend to process supported public media links without requiring manual local uploads.
+
+URL processing should be restricted to trusted public sources and protected against private-network and server-side request forgery (SSRF) risks.
+
+### Model Initialization & Warm-Up
+
+TrustLayer uses background model initialization during server startup.
+
+Models are loaded and pre-warmed before normal inference requests, reducing the latency associated with loading models on the first analysis request.
+
+### Resource Management
+
+The backend incorporates safeguards to improve inference stability:
+
+- Image resizing.
+- Video frame limits.
+- Controlled model initialization.
+- FFmpeg/OpenCV fallback processing.
+- Batch processing within shared sessions.
+
+---
+
+# 7. Custom Model Fine-Tuning
+
+TrustLayer includes a custom training script:
+
+`train_vit.py`
+
+This enables fine-tuning of the baseline Vision Transformer model using organization-specific or domain-specific datasets.
+
+The objective is to improve detection performance on manipulation patterns that are especially relevant to TrustLayer.
+
+### Supported Training Direction
+
+Potential dataset categories include:
+
+| Category | Description |
+|---|---|
+| Authentic | Unmodified camera photographs |
+| Face swap | Images with replaced facial identities |
+| Background replacement | Images with generated or replaced backgrounds |
+| Object inpainting | Images with objects added or removed |
+| Full synthesis | Fully AI-generated images |
+| Composite images | Images combining real and synthetic regions |
+
+### Dataset Strategy
+
+TrustLayer's development strategy uses paired real and manipulated samples wherever possible.
+
+```text
+       ORIGINAL IMAGE
+              |
+        Ground Truth
+              |
+       +------+------+
+       |             |
+   Authentic     Manipulated
+                    |
+          +---------+---------+
+          |         |         |
+       Face Swap  Background  Inpainting
+                  Replacement
+```
+
+Paired datasets allow controlled evaluation of how manipulation affects individual forensic signals.
+
+The original image is useful as a training and evaluation reference. Production inference, however, should remain capable of analyzing an individual artifact without requiring access to its original.
+
+### Fine-Tuning Objective
+
+The long-term objective is to move beyond binary classification and toward manipulation-aware analysis.
+
+Instead of only identifying whether an image is fake, the engine should increasingly distinguish:
+
+- What appears to have been manipulated.
+- Which regions contain suspicious signals.
+- Which detectors support the assessment.
+- How reliable the available evidence is.
+
+---
+
+# 8. Frontend Validator
+
+TrustLayer currently includes a local dark-mode frontend validator designed to visualize backend analysis results.
+
+### Interface Features
+
+- Dark-mode glassmorphism interface.
+- File upload and analysis workflow.
+- Live backend health status.
+- Model initialization status.
+- Manipulation confidence visualizations.
+- Person detection badges.
+- Expandable metadata accordions.
+- Mock-data injection mode.
+
+### Confidence Visualization
+
+Manipulation confidence is displayed using color-coded indicators:
+
+| Color | Interpretation |
+|---|---|
+| Red | High manipulation signal |
+| Yellow | Uncertain or intermediate signal |
+| Green | Low manipulation signal |
+
+These colors represent the current analysis output, not a guarantee of authenticity.
+
+The mock-data injection mode allows frontend development and interface testing without repeatedly invoking expensive inference operations.
+
+---
+
+# 9. API Workflow
+
+The current integration flow is:
+
+```text
+User
+ |
+ v
+Frontend Validator
+ |
+ v
+FastAPI Backend
+ |
+ v
+POST /analyze/
+ |
+ v
+Artifact Ingestion
+ |
+ +------------------------+
+ |                        |
+ v                        v
+Image Analysis        Video Analysis
+ |                        |
+ +------------+-----------+
+              |
+              v
+       Forensic Analysis
+              |
+     +--------+--------+
+     |        |        |
+     v        v        v
+   ViT     InsightFace Metadata
+     |        |        |
+     +--------+--------+
+              |
+              v
+      Structured Results
+              |
+              v
+        Frontend UI
+```
+
+The backend provides the analysis layer while the frontend focuses on communicating results and supporting investigation.
+
+---
+
+# 10. Development Roadmap
+
+TrustLayer is being developed incrementally, preserving the existing analysis infrastructure while expanding its forensic capabilities.
+
+### Phase 1 — Baseline Forensics
+
+- [x] ViT-based image deepfake detection.
+- [x] Face-crop analysis.
+- [x] InsightFace face detection.
+- [x] Session-scoped FaceRegistry.
+- [x] Background noise heuristics.
+- [x] Video frame sampling.
+- [x] EXIF extraction.
+- [x] Metadata anomaly checks.
+- [x] FastAPI analysis endpoints.
+- [x] Frontend validator.
+
+### Phase 2 — Manipulation-Aware Analysis
+
+- [ ] Region-aware manipulation detection.
+- [ ] Dedicated background manipulation detector.
+- [ ] Improved synthetic-image detection.
+- [ ] Object-level manipulation detection.
+- [ ] Improved detection of image composites.
+- [ ] Benchmarking across unseen manipulation techniques.
+- [ ] Model-specific confidence calibration.
+
+### Phase 3 — Evidence Fusion
+
+- [ ] Unified forensic evidence schema.
+- [ ] Detector reliability weighting.
+- [ ] Contradiction-aware evidence fusion.
+- [ ] Evidence coverage calculation.
+- [ ] Explainable manipulation assessments.
+- [ ] Dedicated investigation endpoint.
+
+### Phase 4 — Multimodal Forensics
+
+- [ ] Audio authenticity analysis.
+- [ ] Speech transcription.
+- [ ] Speaker consistency analysis.
+- [ ] Document content analysis.
+- [ ] Audio-video synchronization checks.
+- [ ] Cross-modal entity and timeline consistency.
+
+### Phase 5 — Trust Assessment
+
+- [ ] Evidence graph visualization.
+- [ ] Cross-artifact relationship analysis.
+- [ ] Coordinated synthetic content detection.
+- [ ] Authenticity and manipulation verdicts.
+- [ ] Insufficient-evidence handling.
+- [ ] Investigation reports.
+
+---
+
+# 11. Design Principles
+
+TrustLayer is guided by several principles that influence both its architecture and its evaluation strategy.
+
+**1. Evidence over isolated predictions**
+
+No single detector should determine the authenticity of an artifact.
+
+**2. Modality independence**
+
+Image, video, audio, and document analyzers should operate independently and expose a common evidence interface.
+
+**3. Explainability**
+
+Every assessment should be accompanied by the signals and observations supporting it.
+
+**4. Uncertainty awareness**
+
+The system should distinguish between low manipulation evidence and insufficient evidence.
+
+**5. Extensibility**
+
+Individual detection models should be replaceable without rewriting the entire analysis pipeline.
+
+**6. Responsible confidence**
+
+Model probabilities are not automatically calibrated probabilities of real-world manipulation. TrustLayer should communicate uncertainty rather than overstate its conclusions.
+
+---
+
+# 12. Technology Stack
+
+| Layer | Technology |
+|---|---|
+| Backend framework | FastAPI |
+| Programming language | Python |
+| Deep learning | PyTorch |
+| Model ecosystem | Hugging Face Transformers |
+| Image classification | Vision Transformer |
+| Face detection and recognition | InsightFace |
+| Video processing | FFmpeg |
+| Computer vision | OpenCV |
+| Image forensics | Laplacian variance |
+| HTTP requests | HTTPX |
+| Frontend | Local Validator UI |
+| Model fine-tuning | PyTorch + Hugging Face |
+
+---
+
+# 13. Project Structure
+
+The following represents the logical organization of the current system. Adapt the paths to match the actual repository layout.
+
+```text
+TrustLayer/
+│
+├── backend/
+│   ├── main.py
+│   ├── models/
+│   │   ├── image_detector/
+│   │   └── face_analysis/
+│   │
+│   ├── analyzers/
+│   │   ├── image_analyzer.py
+│   │   ├── video_analyzer.py
+│   │   ├── face_analyzer.py
+│   │   └── metadata_analyzer.py
+│   │
+│   ├── services/
+│   │   ├── face_registry.py
+│   │   └── model_loader.py
+│   │
+│   ├── utils/
+│   │   ├── preprocessing.py
+│   │   └── video_processing.py
+│   │
+│   └── train_vit.py
+│
+├── frontend/
+│   └── ...
+│
+├── tests/
+│   └── ...
+│
+├── requirements.txt
+└── README.md
+```
+
+---
+
+# 14. Getting Started
+
+### Prerequisites
+
+- Python 3.10 or compatible project environment.
+- FFmpeg installed and accessible through PATH.
+- Git.
+- Sufficient RAM and CPU resources for image and video inference.
+- GPU acceleration is recommended where supported.
+
+### Clone the Repository
 
 ```bash
-cd backend
+git clone <YOUR_REPOSITORY_URL>
+cd TrustLayer
+```
+
+### Create a Virtual Environment
+
+Windows:
+
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+
+Linux/macOS:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### Install Dependencies
+
+```bash
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-> **FFmpeg** must be installed and on PATH for video frame extraction.
-> Download: https://ffmpeg.org/download.html
+Ensure FFmpeg is installed separately and accessible from your terminal.
 
----
-
-## Run Backend
+### Start the Backend
 
 ```bash
-cd backend
-uvicorn main:app --reload --port 8000
+python -m uvicorn main:app --reload --port 8000
 ```
 
-API docs: http://localhost:8000/docs
+If your FastAPI entry point is inside a backend package, run the command from the appropriate directory or adjust the module path.
 
----
+### Access API Documentation
 
-## Endpoints
+Once the backend is running:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Backend status & model pre-warm status |
-| `POST` | `/analyze/` | Upload one or more image/video files for analysis |
-| `POST` | `/analyze/url` | Download and analyze an artifact from a public URL |
-| `POST` | `/analyze/mock` | Return realistic mock Evidence JSON |
-| `GET` | `/analyze/status` | Check AI model load state |
-| `POST` | `/investigate/` | Run cross-modal reasoning on Evidence JSON → returns Verdict JSON |
-| `POST` | `/investigate/mock` | Run reasoning directly on `sample_evidence.json` |
-| `POST` | `/investigate/fixture/{name}` | Run reasoning on demo fixtures: `authentic`, `manipulated`, `insufficient`, `coordinated` |
-
----
-
-## Usage
-
-### 1. Extract Evidence (`POST /analyze/`)
-
-```bash
-curl -X POST http://localhost:8000/analyze/ \
-  -F "files=@photo.jpg" \
-  -F "files=@clip.mp4"
+```text
+http://127.0.0.1:8000/docs
 ```
 
-### 2. Generate Trust Verdict (`POST /investigate/`)
+The interactive Swagger interface can be used to test the available analysis endpoints.
 
-```bash
-curl -X POST http://localhost:8000/investigate/ \
-  -H "Content-Type: application/json" \
-  -d '@mock_data/sample_evidence.json'
+---
+
+# 15. Evaluation Strategy
+
+TrustLayer should be evaluated using more than overall accuracy.
+
+Recommended metrics include:
+
+| Metric | Purpose |
+|---|---|
+| Precision | How often flagged manipulations are actually manipulated |
+| Recall | How many manipulated artifacts are successfully identified |
+| F1-score | Balance between precision and recall |
+| False positive rate | How often authentic content is incorrectly flagged |
+| False negative rate | How often manipulated content is missed |
+| Calibration error | Whether confidence scores reflect observed correctness |
+| Inference latency | Time required to analyze artifacts |
+| Evidence coverage | Proportion of expected evidence successfully extracted |
+
+Evaluation should be stratified by manipulation type, image source, compression level, and unseen generation methods.
+
+This is particularly important because performance on one deepfake dataset does not guarantee generalization to other manipulation techniques.
+
+---
+
+# 16. Limitations
+
+TrustLayer is an evolving forensic analysis system, not an infallible authenticity oracle.
+
+Current limitations include:
+
+- Deepfake detection performance depends on the training distribution of the underlying model.
+- The baseline ViT classifier may miss background-only alterations.
+- Laplacian variance is a texture heuristic and cannot independently establish synthetic origin.
+- Video analysis relies on a limited number of sampled frames.
+- EXIF metadata may be absent, stripped, or deliberately modified.
+- Face similarity does not establish a person's real-world identity.
+- A high detector score does not independently prove that an artifact is manipulated.
+- Audio and document forensics are planned capabilities, not part of the currently operational analysis pipeline.
+
+The system should be used as a forensic decision-support tool, with evidence and uncertainty clearly communicated.
+
+---
+
+# 17. Vision
+
+The long-term goal of TrustLayer is to establish a unified evidence-based framework for digital authenticity.
+
+A future investigation should be able to connect multiple artifacts:
+
+```text
+IMAGE
+  |
+  +--> Face identity
+  +--> Visual manipulation
+  +--> Background consistency
+  +--> Metadata
+          |
+          |
+VIDEO ----+
+  |
+  +--> Frame-level evidence
+  +--> Face consistency
+  +--> Temporal signals
+          |
+          |
+AUDIO ----+
+  |
+  +--> Speaker identity
+  +--> Synthetic speech indicators
+  +--> Transcription
+          |
+          |
+DOCUMENT -+
+  |
+  +--> Extracted claims
+  +--> Entity references
+  +--> Timeline information
+          |
+          v
+    EVIDENCE GRAPH
+          |
+          v
+   CROSS-MODAL REASONING
+          |
+          v
+     TRUST ASSESSMENT
+          |
+          v
+  EXPLAINABLE INVESTIGATION
 ```
 
-### Verdict Response Example
-
-```json
-{
-  "verdict": "COORDINATED_SYNTHETIC",
-  "confidence": 0.93,
-  "evidence_coverage": 1.0,
-  "reasons": [
-    "Entity 'person_01' recognized across 3 artifacts (img_a1b2c3, img_d4e5f6, vid_g7h8i9).",
-    "Coordinated synthetic campaign detected across 3 artifact(s) involving cross-artifact entity/media relationships."
-  ],
-  "contradictions": [
-    {
-      "artifact_a": "img_d4e5f6",
-      "artifact_b": "img_d4e5f6",
-      "description": "EXIF metadata reveals digital editing software (Adobe Photoshop 25.0) used on img_d4e5f6.",
-      "severity": "medium"
-    },
-    {
-      "artifact_a": "vid_g7h8i9",
-      "artifact_b": "img_d4e5f6",
-      "description": "Coordinated synthetic manipulation: Entity 'person_01' is manipulated across multiple media files (vid_g7h8i9, img_d4e5f6).",
-      "severity": "high"
-    }
-  ],
-  "relationships": [
-    {
-      "artifact_a": "img_a1b2c3",
-      "artifact_b": "img_d4e5f6",
-      "relation": "shared_person:person_01",
-      "confidence": 0.95
-    }
-  ],
-  "artifact_scores": {
-    "img_d4e5f6": {
-      "manipulation_score": 0.88,
-      "has_synthetic": true,
-      "explanation": "Synthetic visual manipulation detected with 88% confidence."
-    }
-  },
-  "llm_explanation": "TrustLayer has determined with 93% confidence that this set of artifacts represents a COORDINATED SYNTHETIC campaign..."
-}
-```
+The objective is not simply to detect synthetic media. It is to identify inconsistencies, establish relationships, and explain why a collection of digital artifacts should or should not be trusted.
 
 ---
 
-## Modalities & AI Models
+## TrustLayer
 
-| Modality | Status | Models |
-|----------|--------|--------|
-| Image deepfake detection | ✅ Active | `dima806/deepfake_vs_real_image_detection` (ViT) |
-| Face detection & person_id | ✅ Active | InsightFace `buffalo_l` + session `FaceRegistry` |
-| Face-crop deepfake scan | ✅ Active | Bounding-box crop → ViT deepfake scan |
-| Video frame sampling | ✅ Active | FFmpeg (max 12 frames) → image analyzer |
-| Metadata & EXIF analysis | ✅ Active | Pillow EXIF, software & datetime mismatch detection |
-| Cross-modal reasoning | ✅ Active | Modular `backend/reasoning/` (scorer, matcher, contradictions, graph, engine) |
-| Explanation synthesis | ✅ Active | Local fallback engine & optional Gemini API |
-
----
-
-## Demo Fixtures
-
-Deterministic fixtures available for demonstrating all 4 verdicts:
-- `sample_evidence.json` → `COORDINATED_SYNTHETIC`
-- `sample_authentic.json` → `AUTHENTIC`
-- `sample_manipulated.json` → `MANIPULATED`
-- `sample_insufficient.json` → `INSUFFICIENT_EVIDENCE`
-
----
-
-## Schemas
-
-Shared data contracts in `/schemas/`:
-- `evidence.schema.json` — output of `/analyze/`
-- `verdict.schema.json` — output of `/investigate/`
-
----
-
-## Frontend Trust Dashboard
-
-Open `frontend/index.html` in any web browser (or via HTTP server at `http://localhost:5500`) to access the redesigned SaaS UI dashboard:
-- **Visual Design**: Premium SaaS AI aesthetics with soft blue-gray background (`#EEF2F7`), clean white surfaces (`#FFFFFF`), navy typography (`#101828`), and muted periwinkle blue primary accents (`#5B6FD8`).
-- **Batch Upload & URL Analysis**: Drag-and-drop file upload zone and public URL input tabs.
-- **Model Status Indicator**: Real-time polling of backend `/health` showing model readiness.
-- **Trust Verdict Banner**: Prominent verdict badge (`AUTHENTIC`, `MANIPULATED`, `COORDINATED_SYNTHETIC`, `INSUFFICIENT_EVIDENCE`), confidence score, and evidence coverage metrics.
-- **Artifact Manipulation Scores**: Independent per-artifact manipulation scores breakdown.
-- **Reasoning & "Why?" Explanation**: Detailed natural language synthesis and rationale factors.
-- **Contradiction Cards**: Severity badges (`HIGH`, `MEDIUM`, `LOW`) with artifact conflict descriptions.
-- **Cross-Artifact Evidence Graph**: Interactive network graph widget displaying shared entities (e.g. `SHARED PERSON: person_01`) at the apex with smooth Bezier curve connections to individual artifact cards (`press_photo.jpg`, `rally_crowd.jpg`, `speech_clip.mp4`), featuring hover highlight triggers for connected nodes and relationship links.
-- **Evidence Cards & Raw JSON**: Fine-grained manipulation scores, face badges, EXIF accordions, and dark-themed raw JSON toggle.
-
-
----
-
-## Project Structure
-
-```
-backend/
-├── main.py                  # FastAPI app (warmup & router setup)
-├── requirements.txt
-├── routers/
-│   ├── analyze.py           # POST /analyze/, /analyze/url, /analyze/mock
-│   └── investigate.py       # POST /investigate/, /investigate/mock, /investigate/fixture/{name}
-├── reasoning/
-│   ├── __init__.py
-│   ├── scorer.py            # Artifact manipulation scoring
-│   ├── matcher.py           # Entity & metadata matching (person_id)
-│   ├── contradictions.py    # Single-artifact & cross-media conflict detection
-│   ├── graph.py             # Evidence graph relationship builder
-│   ├── engine.py            # Main verdict decision & orchestration
-│   └── llm_explainer.py     # Rationale & "Why?" synthesis
-├── analyzers/
-│   ├── image_analyzer.py    # ViT deepfake + InsightFace + face crops
-│   ├── video_analyzer.py    # FFmpeg frame sampling → image analyzer loop
-│   └── metadata_analyzer.py # EXIF, software & datetime mismatch
-├── models/
-│   └── loader.py            # Lazy singleton model loader
-└── utils/
-    ├── face_registry.py     # Cosine similarity person_id registry
-    └── file_utils.py        # MIME detection & artifact IDs
-frontend/
-└── index.html               # Single-file HTML/CSS/JS Trust Dashboard
-mock_data/
-├── sample_evidence.json     # Coordinated synthetic sample dataset
-├── sample_authentic.json    # Authentic sample dataset
-├── sample_manipulated.json  # Manipulated sample dataset
-└── sample_insufficient.json # Insufficient evidence sample dataset
-schemas/
-├── evidence.schema.json     # Output contract for analysis
-└── verdict.schema.json      # Output contract for reasoning
-```
+**From deepfake detection to evidence-based digital trust.**
